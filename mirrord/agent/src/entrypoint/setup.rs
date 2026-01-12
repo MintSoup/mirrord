@@ -29,7 +29,7 @@ pub(super) async fn start_traffic_redirector(
 
     let flush_connections = envs::STEALER_FLUSH_CONNECTIONS.from_env_or_default();
     let pod_ips = envs::POD_IPS.from_env_or_default();
-    let support_ipv6 = envs::IPV6_SUPPORT.from_env_or_default();
+    let support_ipv6 = true;
     let tls_steal_config = envs::STEAL_TLS_CONFIG.from_env_or_default();
     let tls_handler_store =
         StealTlsHandlerStore::new(tls_steal_config, InTargetPathResolver::new(target_pid));
