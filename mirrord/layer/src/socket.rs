@@ -19,6 +19,7 @@ use mirrord_intproxy_protocol::{NetProtocol, OutgoingConnCloseRequest, PortUnsub
 use mirrord_protocol::{
     DnsLookupError, ResolveErrorKindInternal, ResponseError, outgoing::SocketAddress,
 };
+use rand::Rng;
 use socket2::SockAddr;
 use tracing::warn;
 
@@ -93,6 +94,31 @@ pub(crate) static SOCKETS: LazyLock<Mutex<HashMap<RawFd, Arc<UserSocket>>>> = La
         })
         .unwrap_or_default()
 });
+pub(crate) static SOCKETS_REFCOUNT: LazyLock<Mutex<HashMap<u128, u64>>> =
+    LazyLock::new(Default::default);
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Operation {
+    Increment,
+    Decrement,
+}
+
+pub(crate) fn modify_socket_refcount(socket: &UserSocket, delta: Operation) {
+    match SOCKETS_REFCOUNT.lock().unwrap().get_mut(&socket.uuid) {
+        Some(rc) => match delta {
+            Operation::Increment => *rc += 1,
+            Operation::Decrement => {
+                *rc -= 1;
+                if *rc != 0 {
+                    return;
+                }
+            }
+        },
+        None => {
+            tracing::error!(?socket, ?delta, "refcount entry for socket not found");
+        }
+    };
+}
 
 /// Contains the addresses of a mirrord connected socket.
 ///
@@ -216,6 +242,7 @@ pub(crate) struct UserSocket {
     domain: c_int,
     type_: c_int,
     protocol: c_int,
+    uuid: u128,
     pub state: SocketState,
     pub(crate) kind: SocketKind,
 }
@@ -228,12 +255,17 @@ impl UserSocket {
         state: SocketState,
         kind: SocketKind,
     ) -> Self {
+        let uuid = rand::rng().random();
+        if let Some(previous) = SOCKETS_REFCOUNT.lock().unwrap().insert(uuid, 1) {
+            tracing::error!(?previous, ?uuid, "Socket refcount UUID collision");
+        }
         Self {
             domain,
             type_,
             protocol,
             state,
             kind,
+            uuid,
         }
     }
 
