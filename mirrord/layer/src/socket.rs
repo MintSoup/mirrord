@@ -87,16 +87,16 @@ pub(crate) static SOCKETS: LazyLock<Mutex<HashMap<RawFd, Arc<UserSocket>>>> = La
                         // child-spawning functions that mess with memory
                         // such as fork/exec. See: https://github.com/metalbear-co/mirrord-intellij/issues/374
                         if unsafe { libc::fcntl(fd, libc::F_GETFD, 0) != -1 } {
-                            if let Some(old) = rcs.insert(socket.uuid(), rc) {
-                                if old != rc {
-                                    tracing::error!(
-                                        ?fd,
-                                        ?socket,
-                                        ?rc,
-                                        ?old,
-                                        "multiple different rc counts for same socket"
-                                    );
-                                }
+                            if let Some(old) = rcs.insert(socket.uuid(), rc)
+                                && old != rc
+                            {
+                                tracing::error!(
+                                    ?fd,
+                                    ?socket,
+                                    ?rc,
+                                    ?old,
+                                    "multiple different rc counts for same socket"
+                                );
                             }
                             Some((fd, Arc::new(socket)))
                         } else {
