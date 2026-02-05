@@ -107,7 +107,7 @@ use mirrord_protocol::{EnvVars, GetEnvVarsRequest};
 use nix::errno::Errno;
 use proxy_connection::ProxyConnection;
 use setup::LayerSetup;
-use socket::SOCKETS;
+use socket::{Operation, SOCKETS, modify_socket_refcount};
 use tracing_subscriber::{fmt::format::FmtSpan, prelude::*};
 
 use crate::{
@@ -739,7 +739,7 @@ pub(crate) fn close_layer_fd(fd: c_int) {
         Some(socket) => {
             // Closed file is a socket, so if it's already bound to a port - notify agent to stop
             // mirroring/stealing that port.
-            socket.close();
+            modify_socket_refcount(&socket, Operation::Decrement);
         }
         _ => {
             if setup().fs_config().is_active() {

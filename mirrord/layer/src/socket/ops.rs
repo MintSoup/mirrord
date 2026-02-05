@@ -1056,6 +1056,7 @@ pub(super) fn fcntl(orig_fd: c_int, cmd: c_int, fcntl_fd: i32) -> Result<(), Hoo
 pub(super) fn dup<const SWITCH_MAP: bool>(fd: c_int, dup_fd: i32) -> Result<(), HookError> {
     let mut sockets = SOCKETS.lock()?;
     if let Some(socket) = sockets.get(&fd).cloned() {
+        modify_socket_refcount(&socket, Operation::Increment);
         sockets.insert(dup_fd as RawFd, socket);
 
         if SWITCH_MAP {
@@ -1071,7 +1072,9 @@ pub(super) fn dup<const SWITCH_MAP: bool>(fd: c_int, dup_fd: i32) -> Result<(), 
         open_files.insert(dup_fd as RawFd, cloned_file);
 
         if SWITCH_MAP {
-            sockets.remove(&dup_fd);
+            if let Some(socket) = sockets.remove(&dup_fd) {
+                modify_socket_refcount(&socket, Operation::Decrement);
+            };
         }
     }
 

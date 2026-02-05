@@ -1,7 +1,7 @@
 //! We implement each hook function in a safe function as much as possible, having the unsafe do the
 //! absolute minimum
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, hash_map::Entry},
     net::{SocketAddr, ToSocketAddrs},
     os::unix::io::RawFd,
     str::FromStr,
@@ -104,17 +104,20 @@ pub(crate) enum Operation {
 }
 
 pub(crate) fn modify_socket_refcount(socket: &UserSocket, delta: Operation) {
-    match SOCKETS_REFCOUNT.lock().unwrap().get_mut(&socket.uuid) {
-        Some(rc) => match delta {
-            Operation::Increment => *rc += 1,
+    match SOCKETS_REFCOUNT.lock().unwrap().entry(socket.uuid) {
+        Entry::Occupied(mut e) => match delta {
+            Operation::Increment => *e.get_mut() += 1,
             Operation::Decrement => {
-                *rc -= 1;
-                if *rc != 0 {
+                *e.get_mut() -= 1;
+                if *e.get() != 0 {
                     return;
                 }
+
+                socket.close();
+                e.remove();
             }
         },
-        None => {
+        Entry::Vacant(_) => {
             tracing::error!(?socket, ?delta, "refcount entry for socket not found");
         }
     };
