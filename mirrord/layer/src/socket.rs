@@ -69,7 +69,7 @@ pub(crate) static SOCKETS: LazyLock<Mutex<HashMap<RawFd, Arc<UserSocket>>>> = La
                 .ok()
         })
         .and_then(|decoded| {
-            bincode::decode_from_slice::<Vec<(i32, UserSocket)>, _>(
+            bincode::decode_from_slice::<Vec<(i32, UserSocket, u64)>, _>(
                 &decoded,
                 bincode::config::standard(),
             )
@@ -78,16 +78,30 @@ pub(crate) static SOCKETS: LazyLock<Mutex<HashMap<RawFd, Arc<UserSocket>>>> = La
         })
         .map(|(fds_and_sockets, _)| {
             Mutex::new(HashMap::from_iter(fds_and_sockets.into_iter().filter_map(
-                |(fd, socket)| {
-                    // Do not inherit sockets that are `FD_CLOEXEC`.
-                    // NOTE: The original `fcntl` is called instead of `FN_FCNTL` because the latter
-                    // may be null at this point, likely due to child-spawning functions that mess
-                    // with memory such as fork/exec.
-                    // See: https://github.com/metalbear-co/mirrord-intellij/issues/374
-                    if unsafe { libc::fcntl(fd, libc::F_GETFD, 0) != -1 } {
-                        Some((fd, Arc::new(socket)))
-                    } else {
-                        None
+                {
+                    let mut rcs = SOCKETS_REFCOUNT.lock().unwrap();
+                    move |(fd, socket, rc)| {
+                        // Do not inherit sockets that are `FD_CLOEXEC`.
+                        // NOTE: The original `fcntl` is called instead of `FN_FCNTL` because the
+                        // latter may be null at this point, likely due to
+                        // child-spawning functions that mess with memory
+                        // such as fork/exec. See: https://github.com/metalbear-co/mirrord-intellij/issues/374
+                        if unsafe { libc::fcntl(fd, libc::F_GETFD, 0) != -1 } {
+                            if let Some(old) = rcs.insert(socket.uuid(), rc) {
+                                if old != rc {
+                                    tracing::error!(
+                                        ?fd,
+                                        ?socket,
+                                        ?rc,
+                                        ?old,
+                                        "multiple different rc counts for same socket"
+                                    );
+                                }
+                            }
+                            Some((fd, Arc::new(socket)))
+                        } else {
+                            None
+                        }
                     }
                 },
             )))
@@ -270,6 +284,10 @@ impl UserSocket {
             kind,
             uuid,
         }
+    }
+
+    pub(crate) fn uuid(&self) -> u128 {
+        self.uuid
     }
 
     /// Inform internal proxy about closing a listening port.

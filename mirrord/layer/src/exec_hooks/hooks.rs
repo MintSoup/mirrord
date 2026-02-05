@@ -15,7 +15,7 @@ use crate::{
     detour::{Bypass, Detour},
     hooks::HookManager,
     replace,
-    socket::SHARED_SOCKETS_ENV_VAR,
+    socket::{SHARED_SOCKETS_ENV_VAR, SOCKETS_REFCOUNT},
 };
 
 /// Takes an [`Argv`] with the enviroment variables from an `exec` call, extending it with
@@ -30,15 +30,26 @@ pub(crate) fn prepare_execve_envp(env_vars: Detour<Argv>) -> Detour<Argv> {
     })?;
 
     let lock = SOCKETS.lock()?;
+    let rcs = SOCKETS_REFCOUNT.lock()?;
     let shared_sockets = lock
         .iter()
-        .map(|(key, value)| (*key, value))
+        .map(|(fd, socket)| {
+            (
+                *fd,
+                socket,
+                rcs.get(&socket.uuid()).unwrap_or_else(|| {
+                    tracing::error!(?fd, ?socket, "socket with no refcount entry");
+                    &1
+                }),
+            )
+        })
         .collect::<Vec<_>>();
 
     let encoded = bincode::encode_to_vec(shared_sockets, bincode::config::standard())
         .map(|bytes| BASE64_URL_SAFE.encode(bytes))?;
 
     drop(lock);
+    drop(rcs);
 
     env_vars.insert_env(SHARED_SOCKETS_ENV_VAR, &encoded)?;
 
