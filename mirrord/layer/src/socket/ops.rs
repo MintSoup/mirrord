@@ -1071,10 +1071,8 @@ pub(super) fn dup<const SWITCH_MAP: bool>(fd: c_int, dup_fd: i32) -> Result<(), 
         let cloned_file = file.clone();
         open_files.insert(dup_fd as RawFd, cloned_file);
 
-        if SWITCH_MAP {
-            if let Some(socket) = sockets.remove(&dup_fd) {
-                modify_socket_refcount(&socket, Operation::Decrement);
-            };
+        if SWITCH_MAP && let Some(socket) = sockets.remove(&dup_fd) {
+            modify_socket_refcount(&socket, Operation::Decrement);
         }
     }
 
