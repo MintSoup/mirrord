@@ -122,6 +122,11 @@ pub(crate) fn modify_socket_refcount(socket: &UserSocket, delta: Operation) {
         Entry::Occupied(mut e) => match delta {
             Operation::Increment => *e.get_mut() += 1,
             Operation::Decrement => {
+                if *e.get() == 0 {
+                    tracing::error!(?socket, "socket with 0 refcount but not deleted");
+                    return;
+                }
+
                 *e.get_mut() -= 1;
                 if *e.get() != 0 {
                     return;
