@@ -18,6 +18,7 @@ use mirrord_kube::error::KubeApiError;
 use mirrord_operator::client::error::{HttpError, OperatorApiError, OperatorOperation};
 use mirrord_protocol_io::ProtocolError;
 use mirrord_tls_util::SecureChannelError;
+use mirrord_up::UpError;
 use mirrord_vpn::error::VpnError;
 use reqwest::StatusCode;
 use thiserror::Error;
@@ -598,6 +599,11 @@ pub(crate) enum CliError {
         Please check that the target exists and has running pods.{GENERAL_HELP}"
     ))]
     RuntimeDataResolution(KubeApiError),
+
+    /// Errors produced by the `mirrord up` command.
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Up(#[from] UpError),
 
     /// Errors produced by the `mirrord ui` command.
     #[cfg(unix)]
