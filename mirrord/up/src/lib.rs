@@ -9,7 +9,6 @@ use thiserror::Error;
 mod config;
 
 pub use config::UpConfig;
-use config::UpFileConfig;
 
 /// Errors produced by `mirrord up` command.
 #[derive(Debug, Error, Diagnostic)]
@@ -28,8 +27,6 @@ pub enum UpError {
 /// Load and parse a `mirrord-up.yaml` configuration file.
 pub fn load_up_config(path: &PathBuf) -> Result<UpConfig, UpError> {
     let content = std::fs::read_to_string(path)?;
-    let file_config: UpFileConfig = serde_yaml::from_str(&content)?;
-    let mut context = ConfigContext::default();
-    let config = file_config.generate_config(&mut context)?;
+    let config: UpConfig = serde_yaml::from_str(&content)?;
     Ok(config)
 }
