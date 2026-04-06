@@ -235,6 +235,9 @@ windows = { version = "0.61", features = [
     "Win32_Networking_WinSock",
 ] }
 
+# Used by `cli`
+whoami = "2.1.1"
+
 # Used by `cli`, `kube`
 itertools = "0.14.0"
 

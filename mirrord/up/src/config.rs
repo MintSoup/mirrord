@@ -1,19 +1,17 @@
-use std::{collections::HashMap, fmt, marker::PhantomData, str::FromStr};
+use std::collections::HashMap;
 
-/// Configuration types for `mirrord-up.yaml`.
-///
-/// Uses the two-layer config pattern from mirrord-config: file config structs (with
-/// `Option<T>` fields, for flexible deserialization) are resolved into runtime config structs
-/// (with concrete types and defaults applied) via `MirrordConfig::generate_config`.
 use mirrord_config::{
-    config::ConfigError,
+    LayerConfig, LayerFileConfig,
+    config::{ConfigContext, EnvKey, MirrordConfig},
+    env_key::EnvKeyFileConfig,
     feature::{
         env::EnvConfig,
-        network::incoming::http_filter::{HttpFilterConfig, HttpFilterFileConfig},
+        network::incoming::{IncomingMode, http_filter::HttpFilterConfig},
     },
-    target::Target,
+    target::{Target, TargetFileConfig},
 };
-use serde::{Deserialize, Deserializer, Serialize, de};
+use serde::{Deserialize, Serialize};
+use strum_macros::IntoStaticStr;
 
 /// Incoming traffic mode for a service.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -25,9 +23,11 @@ pub enum ServiceMode {
     Steal,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default, IntoStaticStr)]
 #[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
 pub enum RunType {
+    #[default]
     Exec,
     Container,
 }
@@ -35,85 +35,124 @@ pub enum RunType {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub struct RunConfig {
-    r#type: RunType,
-    command: Vec<String>,
+    #[serde(default)]
+    pub r#type: RunType,
+    pub command: Vec<String>,
 }
 
 /// Default settings applied to all services.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct DefaultsConfig {
-    pub accept_invalid_certificates: bool,
-    pub operator: bool,
+    pub accept_invalid_certificates: Option<bool>,
+    pub operator: Option<bool>,
     pub telemetry: bool,
 }
 
-pub fn string_or_struct_option<'de, T, D>(deserializer: D) -> Result<T, D::Error>
-where
-    T: Deserialize<'de> + FromStr<Err = ConfigError>,
-    D: Deserializer<'de>,
-{
-    // This is a Visitor that forwards string types to T's `FromStr` impl and
-    // forwards map types to T's `Deserialize` impl. The `PhantomData` is to
-    // keep the compiler from complaining about T being an unused generic type
-    // parameter. We need T in order to know the Value type for the Visitor
-    // impl.
-    struct StringOrStruct<T>(PhantomData<fn() -> T>);
-
-    impl<'de, T> de::Visitor<'de> for StringOrStruct<T>
-    where
-        T: Deserialize<'de> + FromStr<Err = ConfigError>,
-    {
-        type Value = T;
-
-        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-            formatter.write_str("string or map")
-        }
-
-        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-        where
-            E: de::Error,
-        {
-            FromStr::from_str(value).map_err(|err| de::Error::custom(err))
-        }
-
-        fn visit_map<M>(self, map: M) -> Result<Self::Value, M::Error>
-        where
-            M: de::MapAccess<'de>,
-        {
-            // `MapAccessDeserializer` is a wrapper that turns a `MapAccess`
-            // into a `Deserializer`, allowing it to be used as the input to T's
-            // `Deserialize` implementation. T then deserializes itself using
-            // the entries from the map visitor.
-            Deserialize::deserialize(de::value::MapAccessDeserializer::new(map)).map(T::into)
+impl Default for DefaultsConfig {
+    fn default() -> Self {
+        Self {
+            accept_invalid_certificates: None,
+            operator: None,
+            telemetry: true,
         }
     }
-
-    deserializer.deserialize_any(StringOrStruct(PhantomData))
 }
 
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, Default)]
 pub struct TargetConfig {
-    #[serde(deserialize_with = "string_or_struct_option")]
-    // #[schemars(schema_with = "make_simple_target_custom_schema")]
-    pub path: Target,
+    #[serde(deserialize_with = "mirrord_config::util::string_or_struct_option")]
+    pub path: Option<Target>,
     pub namespace: Option<String>,
+}
+
+impl From<TargetConfig> for mirrord_config::target::TargetConfig {
+    fn from(value: TargetConfig) -> Self {
+        Self {
+            path: value.path,
+            namespace: value.namespace,
+        }
+    }
 }
 
 /// Per-service configuration.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct ServiceConfig {
+    #[serde(default)]
     pub target: TargetConfig,
+
+    #[serde(default)]
     pub env: EnvConfig,
+
+    #[serde(default)]
     pub mode: ServiceMode,
-    pub http_filter: Option<HttpFilterConfig>,
+
+    #[serde(default)]
+    pub http_filter: HttpFilterConfig,
+
     pub run: RunConfig,
 }
 
 /// Resolved top-level `mirrord-up.yaml` configuration.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct UpConfig {
+    #[serde(default)]
     pub defaults: DefaultsConfig,
     pub services: HashMap<String, ServiceConfig>,
+}
+
+impl ServiceConfig {
+    fn assemble(self, defaults: &DefaultsConfig, key: EnvKey) -> (LayerConfig, RunConfig) {
+        let mut cfg = LayerFileConfig {
+            accept_invalid_certificates: defaults.accept_invalid_certificates,
+            operator: defaults.operator,
+            telemetry: Some(defaults.telemetry),
+            ..Default::default()
+        }
+        .generate_config(&mut ConfigContext::default())
+        .unwrap();
+
+        cfg.key = key;
+        cfg.target = self.target.into();
+        cfg.feature.env = self.env;
+
+        match self.mode {
+            ServiceMode::Mirror => cfg.feature.network.incoming.mode = IncomingMode::Mirror,
+            ServiceMode::Replace => {
+                cfg.feature.network.incoming.mode = IncomingMode::Steal;
+                cfg.feature.copy_target.enabled = true;
+                cfg.feature.copy_target.scale_down = true;
+            }
+            ServiceMode::Steal => cfg.feature.network.incoming.mode = IncomingMode::Steal,
+        }
+
+        cfg.feature.network.incoming.http_filter = self.http_filter;
+
+        (cfg, self.run)
+    }
+}
+
+pub struct SubprocessCfg {
+    pub config: LayerConfig,
+    pub service_name: String,
+    pub run: RunConfig,
+}
+
+impl UpConfig {
+    pub fn service_configs<'a>(
+        self,
+        key: &'a EnvKey,
+    ) -> impl Iterator<Item = SubprocessCfg> + use<'a> {
+        let Self { defaults, services } = self;
+
+        services.into_iter().map(move |(service_name, svc)| {
+            let (config, run) = svc.assemble(&defaults, key.clone());
+            SubprocessCfg {
+                config,
+                service_name,
+                run,
+            }
+        })
+    }
 }
 
 #[cfg(test)]
@@ -132,18 +171,10 @@ mod tests {
             services:
               my-svc:
                 run:
-                  exec:
-                    command: ["echo"]
+                  command: ["echo"]
             "#,
         );
-        assert_eq!(
-            config.defaults,
-            DefaultsConfig {
-                accept_invalid_certificates: false,
-                operator: true,
-                telemetry: true,
-            }
-        );
+        assert_eq!(config.defaults, Default::default(),);
     }
 
     #[test]
@@ -157,15 +188,14 @@ mod tests {
             services:
               my-svc:
                 run:
-                  exec:
-                    command: ["echo"]
+                  command: ["echo"]
             "#,
         );
         assert_eq!(
             config.defaults,
             DefaultsConfig {
-                accept_invalid_certificates: true,
-                operator: false,
+                accept_invalid_certificates: Some(true),
+                operator: Some(false),
                 telemetry: false,
             }
         );
@@ -187,8 +217,8 @@ mod tests {
                 http_filter:
                   header_filter: "x-session: local"
                 run:
-                  container:
-                    command: ["docker", "run", "-p", "8080:8080", "web:latest"]
+                  type: container
+                  command: ["docker", "run", "-p", "8080:8080", "web:latest"]
             "#,
         );
         let svc = &config.services["web"];
@@ -209,7 +239,8 @@ mod tests {
         );
         assert_eq!(
             svc.run,
-            RunConfig::Container {
+            RunConfig {
+                r#type: RunType::Container,
                 command: vec![
                     "docker".into(),
                     "run".into(),
@@ -229,17 +260,20 @@ mod tests {
               svc-a:
                 mode: replace
                 run:
-                  exec:
-                    command: ["node", "a.js"]
+                  type: exec
+                  command: ["node", "a.js"]
               svc-b:
                 run:
-                  exec:
-                    command: ["node", "b.js"]
+                  command: ["node", "b.js"]
             "#,
         );
         assert_eq!(config.services.len(), 2);
         assert_eq!(config.services["svc-a"].mode, ServiceMode::Replace);
         assert_eq!(config.services["svc-b"].mode, ServiceMode::Mirror);
+
+        for service in config.services.values() {
+            assert_eq!(service.run.r#type, RunType::Exec);
+        }
     }
 
     #[test]
@@ -249,19 +283,12 @@ mod tests {
             services:
               svc:
                 run:
-                  exec:
-                    command: ["echo"]
+                  command: ["echo"]
             "#,
         );
         let svc = &config.services["svc"];
         assert_eq!(svc.mode, ServiceMode::Mirror);
-        assert_eq!(
-            svc.target,
-            TargetConfig {
-                path: None,
-                namespace: None
-            }
-        );
+        assert_eq!(svc.env, EnvConfig::default());
     }
 
     #[test]
@@ -270,10 +297,10 @@ mod tests {
             r#"
             services:
               svc:
-                target: "pod/my-pod/container/main"
+                target:
+                  path: "pod/my-pod/container/main"
                 run:
-                  exec:
-                    command: ["echo"]
+                  command: ["echo"]
             "#,
         );
         assert_eq!(
@@ -289,23 +316,21 @@ mod tests {
 
     // -- Error cases --
 
-    // #[test]
-    // fn error_missing_run() {
-    //     let file_config: UpConfig = serde_yaml::from_str(
-    //         r#"
-    //         services:
-    //           svc:
-    //             mode: steal
-    //         "#,
-    //     )
-    //     .unwrap();
-    //     let mut context = ConfigContext::default();
-    //     let err = file_config.generate_config(&mut context).unwrap_err();
-    //     assert!(
-    //         err.to_string().contains("run"),
-    //         "expected error about missing run, got: {err}"
-    //     );
-    // }
+    #[test]
+    fn error_missing_run() {
+        let err = serde_yaml::from_str::<UpConfig>(
+            r#"
+            services:
+              svc:
+                mode: steal
+            "#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("missing field `run`"),
+            "expected error about missing run, got: {err}"
+        );
+    }
 
     // #[test]
     // fn error_invalid_mode() {

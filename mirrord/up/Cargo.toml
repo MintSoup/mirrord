@@ -21,6 +21,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_yaml.workspace = true
 miette = { workspace = true, features = ["fancy"] }
 thiserror.workspace = true
+strum_macros.workspace = true
 
 
 [lints]

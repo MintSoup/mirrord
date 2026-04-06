@@ -3,12 +3,11 @@
 use std::path::PathBuf;
 
 use miette::Diagnostic;
-use mirrord_config::config::{ConfigContext, ConfigError, MirrordConfig};
+use mirrord_config::config::ConfigError;
 use thiserror::Error;
-
 mod config;
 
-pub use config::UpConfig;
+pub use config::{SubprocessCfg, UpConfig};
 
 /// Errors produced by `mirrord up` command.
 #[derive(Debug, Error, Diagnostic)]
@@ -27,6 +26,5 @@ pub enum UpError {
 /// Load and parse a `mirrord-up.yaml` configuration file.
 pub fn load_up_config(path: &PathBuf) -> Result<UpConfig, UpError> {
     let content = std::fs::read_to_string(path)?;
-    let config: UpConfig = serde_yaml::from_str(&content)?;
-    Ok(config)
+    Ok(serde_yaml::from_str(&content)?)
 }
