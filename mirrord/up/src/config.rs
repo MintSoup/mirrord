@@ -3,12 +3,11 @@ use std::collections::HashMap;
 use mirrord_config::{
     LayerConfig, LayerFileConfig,
     config::{ConfigContext, EnvKey, MirrordConfig},
-    env_key::EnvKeyFileConfig,
     feature::{
         env::EnvConfig,
         network::incoming::{IncomingMode, http_filter::HttpFilterConfig},
     },
-    target::{Target, TargetFileConfig},
+    target::Target,
 };
 use serde::{Deserialize, Serialize};
 use strum_macros::IntoStaticStr;

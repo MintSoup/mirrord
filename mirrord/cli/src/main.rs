@@ -280,7 +280,7 @@ use mirrord_analytics::{
 };
 use mirrord_config::{
     LayerConfig,
-    config::{ConfigContext, ConfigError},
+    config::ConfigContext,
     feature::{
         database_branches::{DatabaseBranchConfig, RedisBranchLocation},
         fs::FsModeConfig,
@@ -756,7 +756,7 @@ async fn exec(
     cfg_context = apply_test_env_overrides(cfg_context);
 
     let (config_file_path, mut config) =
-        if let Ok(encoded) = std::env::var(up::RESOLVED_CONFIG_ENV) {
+        if let Ok(encoded) = std::env::var(mirrord_up::RESOLVED_CONFIG_ENV) {
             // Running as a child of `mirrord up`, resolve config from env
             let config = LayerConfig::decode(&encoded)?;
             (None, config)
