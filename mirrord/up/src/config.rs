@@ -335,50 +335,18 @@ mod tests {
         );
     }
 
-    // #[test]
-    // fn error_invalid_mode() {
-    //     let result: Result<UpConfig, _> = serde_yaml::from_str(
-    //         r#"
-    //         services:
-    //           svc:
-    //             mode: bogus
-    //             run:
-    //               exec:
-    //                 command: ["echo"]
-    //         "#,
-    //     );
-    //     assert!(result.is_err());
-    // }
-
-    // #[test]
-    // fn error_invalid_target_path() {
-    //     let result: Result<UpConfig, _> = serde_yaml::from_str(
-    //         r#"
-    //         services:
-    //           svc:
-    //             target: "not-a-valid-target"
-    //             run:
-    //               exec:
-    //                 command: ["echo"]
-    //         "#,
-    //     );
-    //     assert!(result.is_err());
-    // }
-
-    // #[test]
-    // fn error_invalid_run_variant() {
-    //     let file_config: UpConfig = serde_yaml::from_str(
-    //         r#"
-    //         services:
-    //           svc:
-    //             run:
-    //               teleport:
-    //                 command: ["beam", "me", "up"]
-    //         "#,
-    //     )
-    //     assert!(
-    //         err.to_string().contains("run"),
-    //         "expected error about run, got: {err}"
-    //     );
-    // }
+    #[test]
+    fn error_invalid_mode() {
+        let result: Result<UpConfig, _> = serde_yaml::from_str(
+            r#"
+            services:
+              svc:
+                mode: bogus
+                run:
+                  exec:
+                    command: ["echo"]
+            "#,
+        );
+        assert!(result.is_err());
+    }
 }
