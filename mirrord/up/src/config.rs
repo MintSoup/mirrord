@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use mirrord_config::{
     LayerConfig, LayerFileConfig,
@@ -88,6 +88,9 @@ pub struct ServiceConfig {
     #[serde(default)]
     pub http_filter: HttpFilterConfig,
 
+    #[serde(default)]
+    pub ignore_ports: HashSet<u16>,
+
     pub run: RunConfig,
 }
 
@@ -125,6 +128,7 @@ impl ServiceConfig {
         }
 
         cfg.feature.network.incoming.http_filter = self.http_filter;
+        cfg.feature.network.incoming.ignore_ports = self.ignore_ports;
 
         (cfg, self.run)
     }
