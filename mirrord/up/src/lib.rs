@@ -58,7 +58,7 @@ pub async fn run(up_config: UpConfig, key: EnvKey) -> Result<(), UpError> {
 
             let mut cmd = Command::new(std::env::current_exe()?);
             cmd.env(RESOLVED_CONFIG_ENV, encoded_cfg)
-                .env(MIRRORD_PROGRESS_ENV, "json")
+                .env(MIRRORD_PROGRESS_ENV, "simple")
                 .arg(Into::<&'static str>::into(run.r#type))
                 .arg("--")
                 .args(run.command)

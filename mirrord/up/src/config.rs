@@ -6,6 +6,7 @@ use mirrord_config::{
     feature::{
         env::EnvConfig,
         network::incoming::{IncomingMode, http_filter::HttpFilterConfig},
+        split_queues::{QueueFilter, SplitQueuesConfig},
     },
     target::Target,
 };
@@ -17,9 +18,7 @@ use strum_macros::IntoStaticStr;
 #[serde(rename_all = "lowercase")]
 pub enum ServiceMode {
     #[default]
-    Mirror,
-    Replace,
-    Steal,
+    Split,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default, IntoStaticStr)]
@@ -113,22 +112,45 @@ impl ServiceConfig {
         .generate_config(&mut ConfigContext::default())
         .unwrap();
 
-        cfg.key = key;
         cfg.target = self.target.into();
         cfg.feature.env = self.env;
 
         match self.mode {
-            ServiceMode::Mirror => cfg.feature.network.incoming.mode = IncomingMode::Mirror,
-            ServiceMode::Replace => {
+            ServiceMode::Split => {
                 cfg.feature.network.incoming.mode = IncomingMode::Steal;
-                cfg.feature.copy_target.enabled = true;
-                cfg.feature.copy_target.scale_down = true;
+
+                cfg.feature.network.incoming.http_filter = if self.http_filter.is_filter_set() {
+                    self.http_filter
+                } else {
+                    HttpFilterConfig {
+                        header_filter: Some(format!(
+                            "baggage: .+mirrord-session={}.+",
+                            key.as_str()
+                        )),
+                        ..Default::default()
+                    }
+                };
+                cfg.feature.split_queues = SplitQueuesConfig(
+                    [(
+                        "*".to_string(),
+                        QueueFilter::Sqs {
+                            message_filter: Some(
+                                [(
+                                    "baggage".to_string(),
+                                    format!(".+mirrord-session={}.+", key.as_str()),
+                                )]
+                                .into(),
+                            ),
+                            jq_filter: None,
+                        },
+                    )]
+                    .into(),
+                )
             }
-            ServiceMode::Steal => cfg.feature.network.incoming.mode = IncomingMode::Steal,
         }
 
-        cfg.feature.network.incoming.http_filter = self.http_filter;
         cfg.feature.network.incoming.ignore_ports = self.ignore_ports;
+        cfg.key = key;
 
         (cfg, self.run)
     }
@@ -216,7 +238,7 @@ mod tests {
                 env:
                   override:
                     NODE_ENV: "development"
-                mode: steal
+                mode: split
                 http_filter:
                   header_filter: "x-session: local"
                 run:
@@ -235,7 +257,7 @@ mod tests {
             svc.env.r#override.as_ref().unwrap()["NODE_ENV"],
             "development"
         );
-        assert_eq!(svc.mode, ServiceMode::Steal);
+        assert_eq!(svc.mode, ServiceMode::Split);
         assert_eq!(
             svc.http_filter.header_filter.as_deref(),
             Some("x-session: local")
@@ -261,7 +283,6 @@ mod tests {
             r#"
             services:
               svc-a:
-                mode: replace
                 run:
                   type: exec
                   command: ["node", "a.js"]
@@ -271,8 +292,6 @@ mod tests {
             "#,
         );
         assert_eq!(config.services.len(), 2);
-        assert_eq!(config.services["svc-a"].mode, ServiceMode::Replace);
-        assert_eq!(config.services["svc-b"].mode, ServiceMode::Mirror);
 
         for service in config.services.values() {
             assert_eq!(service.run.r#type, RunType::Exec);
@@ -290,7 +309,6 @@ mod tests {
             "#,
         );
         let svc = &config.services["svc"];
-        assert_eq!(svc.mode, ServiceMode::Mirror);
         assert_eq!(svc.env, EnvConfig::default());
     }
 
@@ -325,7 +343,7 @@ mod tests {
             r#"
             services:
               svc:
-                mode: steal
+                mode: split
             "#,
         )
         .unwrap_err();
