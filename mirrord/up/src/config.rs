@@ -6,7 +6,6 @@ use mirrord_config::{
     feature::{
         env::EnvConfig,
         network::incoming::{IncomingMode, http_filter::HttpFilterConfig},
-        split_queues::{QueueFilter, SplitQueuesConfig},
     },
     target::Target,
 };
@@ -124,28 +123,12 @@ impl ServiceConfig {
                 } else {
                     HttpFilterConfig {
                         header_filter: Some(format!(
-                            "baggage: .+mirrord-session={}.+",
+                            "baggage: .*mirrord-session={}.*",
                             key.as_str()
                         )),
                         ..Default::default()
                     }
                 };
-                cfg.feature.split_queues = SplitQueuesConfig(
-                    [(
-                        "*".to_string(),
-                        QueueFilter::Sqs {
-                            message_filter: Some(
-                                [(
-                                    "baggage".to_string(),
-                                    format!(".+mirrord-session={}.+", key.as_str()),
-                                )]
-                                .into(),
-                            ),
-                            jq_filter: None,
-                        },
-                    )]
-                    .into(),
-                )
             }
         }
 
