@@ -1,6 +1,5 @@
 //! The `mirrord up` command - runs multiple mirrord sessions from a `mirrord-up.yaml` file.
 
-
 use mirrord_config::config::EnvKey;
 use mirrord_up::load_up_config;
 
