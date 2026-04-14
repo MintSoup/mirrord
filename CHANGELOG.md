@@ -8,6 +8,93 @@ This project uses [*towncrier*](https://towncrier.readthedocs.io/) and the chang
 
 <!-- towncrier release notes start -->
 
+## [3.201.0](https://github.com/metalbear-co/mirrord/tree/3.201.0) - 2026-04-10
+
+
+### Added
+
+- Added `mirrord diagnose license` for troubleshooting mirrord for Teams
+  license usage.
+- Added local and remote session management commands under `mirrord session`.
+- Implemented `mirrord attach` on Windows to support IDE extensions.
+
+
+### Changed
+
+- Preview environments now have a default HTTP header filter, `baggage:
+  *.mirrord-session={{key}}.*`, which will be used if no filter is configured.
+- Preview environments now ignore the config option
+  `feature.network.incoming.http_filter.ports` to prevent accidentally stealing
+  traffic without a filter. This means that all HTTP filters now
+  unconditionally apply to all intercepted ports.
+
+## [3.200.0](https://github.com/metalbear-co/mirrord/tree/3.200.0) - 2026-04-09
+
+
+### Changed
+
+- Add Ruby and sh files to default local filter
+- Moved agent container command line arguments from `command` to `args` in
+  order to enable matching with GKE Autopilot WorkloadAllowlist.
+- Identify local redis database branch instances by db branch id instead of by
+  port.
+
+### Fixed
+
+- Fix preview environments failure when using it in CI contexts where a mirrord
+  user isn't configured.
+- Preview env resolve target backwards compatible fix.
+
+## [3.199.0](https://github.com/metalbear-co/mirrord/tree/3.199.0) - 2026-04-06
+
+
+### Added
+
+- Emit a warning when agent settings are configured but ignored because the
+  mirrord operator is managing the session.
+
+
+### Changed
+
+- Adjusted error message for client failure to connect to operator
+
+
+### Fixed
+
+- fixed regression of mirrord container introduced in 3.196.0
+  [#4126](https://github.com/metalbear-co/mirrord/issues/4126)
+- mirrord container on colima now works without disabling TLS
+
+## [3.198.0](https://github.com/metalbear-co/mirrord/tree/3.198.0) - 2026-04-02
+
+
+### Added
+
+- Added `mirrord ui` command that launches a local web dashboard for monitoring
+  all active mirrord sessions in real time. Each session now exposes a
+  per-session HTTP API on a Unix socket for health checks, session info, event
+  streaming (SSE), and session termination.
+- Preview env support for Multi Cluster.
+- When DB branches are enabled, intproxy now automatically creates portforwards
+  to DB pods. Active portforwards can be viewed with `mirrord db-branches
+  connections`.
+
+
+### Fixed
+
+- Changed the progress printout to specify `(cli version X.Y.Z)` to avoid
+  confusing output in operator commands.
+- Fixed an issue where new versions of the mirrord CLI were sometimes not able
+  to use old versions of the mirrord Operator (`Unable to decode to pem
+  body...` error).
+
+
+### Internal
+
+- Removed CRD and related types that are only used by the operator into the
+  `metalbear-co/operator` repository.
+- Revamped and trimmed nix shell.
+
 ## [3.197.1](https://github.com/metalbear-co/mirrord/tree/3.197.1) - 2026-03-31
 
 

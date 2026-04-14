@@ -35,9 +35,9 @@ use mirrord_config::{
 };
 use mirrord_kube::api::runtime::RuntimeDataProvider;
 use mirrord_operator::{
-    client::{OperatorApi, PreparedClientCert},
+    client::{NoClientCert, OperatorApi},
     crd::{
-        NewOperatorFeature,
+        NewOperatorFeature, TARGET_NAMESPACE_ANNOTATION, TargetCrd,
         preview::{
             PreviewDbBranchingConfig, PreviewEnvVarsConfig, PreviewIncomingConfig,
             PreviewQueueSplittingConfig, PreviewSession, PreviewSessionPhase, PreviewSessionSpec,
@@ -134,10 +134,10 @@ async fn preview_start(
         CliError::PreviewListFailed(e.to_string())
     })?;
 
-    // Check if there's an existing session with the same key and warns the user about it.
+    // Check if there's an existing session with the same key and warn the user about it.
     if existing_sessions.items.is_empty().not() {
         progress.warning(&format!(
-            "This key {key} is already part of an existing environment. \
+            "the key '{key}' is already part of an existing preview environment. \
             If that’s not what you intended, please switch to a different key."
         ));
     }
@@ -217,7 +217,10 @@ async fn preview_start(
             PreviewTtlMins::Finite(mins) => mins.saturating_mul(60),
             PreviewTtlMins::Infinite(_) => PreviewTtlMins::INFINITE_TTL_SECS,
         },
-        incoming: PreviewIncomingConfig::from_config(&layer_config.feature.network.incoming),
+        incoming: PreviewIncomingConfig::from_config(
+            &layer_config.feature.network.incoming,
+            layer_config.key.as_str(),
+        ),
         queue_splitting: PreviewQueueSplittingConfig::from_config(
             &layer_config.feature.split_queues,
         ),
@@ -235,10 +238,28 @@ async fn preview_start(
         })?,
     };
 
+    let annotations = operator_api
+        .operator()
+        .spec
+        .operator_namespace
+        .is_some()
+        .then(|| {
+            let target_ns = layer_config
+                .target
+                .namespace
+                .as_deref()
+                .unwrap_or(operator_api.client().default_namespace());
+            BTreeMap::from([(
+                TARGET_NAMESPACE_ANNOTATION.to_string(),
+                target_ns.to_owned(),
+            )])
+        });
+
     let session = PreviewSession {
         metadata: ObjectMeta {
             name: Some(session_name),
             labels: Some(session_labels),
+            annotations,
             ..Default::default()
         },
         spec: session_spec,
@@ -363,7 +384,7 @@ async fn preview_start(
         .as_deref()
         .unwrap_or(operator_api.client().default_namespace());
 
-    progress.success(None);
+    progress.success(Some("preview environment created successfully"));
 
     let key = layer_config.key.as_str();
 
@@ -555,21 +576,16 @@ async fn preview_stop(
 
     let mut subtask = progress.subtask("finding preview sessions");
 
-    // Resolve the config target (if provided) to a full SessionTarget for comparison.
-    // This allows the user to type, for example, "deployment/foo" and have it match a session that
-    // has `spec.target` set to "Deployment/foo/container/foo"
     let session_target = match &layer_config.target.path {
-        Some(config_target) => {
-            let session_target = resolve_config_target(
+        Some(config_target) => Some(
+            resolve_config_target(
                 config_target,
                 operator_api.client(),
                 layer_config.target.namespace.as_deref(),
             )
             .await
-            .inspect_err(|_| subtask.failure(None))?;
-
-            Some(session_target)
-        }
+            .inspect_err(|_| subtask.failure(None))?,
+        ),
         None => None,
     };
 
@@ -648,24 +664,43 @@ async fn preview_stop(
     Ok(())
 }
 
-/// Resolves a [`Target`] to a [`SessionTarget`] by auto-detecting the container if not
-/// specified, then converting to the session representation.
+/// Resolves a [`Target`] to a [`SessionTarget`] by fetching the target from the
+/// operator's GET TargetCrd API. The operator validates the target exists and resolves
+/// the container if not specified. Works for both single-cluster and multi-cluster.
+///
+/// Falls back to local `runtime_data` resolution if the operator didn't resolve the
+/// container (backwards compatibility with older operators).
 async fn resolve_config_target(
     config_target: &Target,
     client: &kube::Client,
     namespace: Option<&str>,
 ) -> CliResult<SessionTarget> {
-    let mut config_target_with_container = config_target.clone();
-    if config_target_with_container.container().is_none() {
+    let ns = namespace.unwrap_or(client.default_namespace());
+    let target_api: Api<TargetCrd> = Api::namespaced(client.clone(), ns);
+    let target_crd = target_api
+        .get(&TargetCrd::urlfied_name(config_target))
+        .await
+        .map_err(|e| CliError::PreviewTargetResolutionFailed(e.to_string()))?;
+    let mut target = target_crd
+        .spec
+        .target
+        .as_known()
+        .map_err(|e| CliError::PreviewTargetResolutionFailed(e.to_string()))?
+        .clone();
+
+    // Older operators don't resolve the container in GET TargetCrd. Fall back to
+    // querying the cluster directly so the CLI stays compatible with them.
+    if target.container().is_none() {
         let runtime_data = config_target
             .runtime_data(client, namespace)
             .await
-            .map_err(CliError::RuntimeDataResolution)?;
-        config_target_with_container.set_container(runtime_data.container_name);
+            .map_err(|e| CliError::PreviewTargetResolutionFailed(e.to_string()))?;
+        target.set_container(runtime_data.container_name);
     }
 
-    SessionTarget::from_config(config_target_with_container)
-        .ok_or_else(|| CliError::PreviewTargetResolutionFailed(config_target.to_string()))
+    SessionTarget::from_config(target).ok_or_else(|| {
+        CliError::PreviewTargetResolutionFailed("no valid container found".to_owned())
+    })
 }
 
 fn load_preview_config(
@@ -699,7 +734,7 @@ async fn create_preview_api(
     all_namespaces: bool,
     progress: &ProgressTracker,
     analytics: &mut AnalyticsReporter,
-) -> CliResult<(OperatorApi<PreparedClientCert>, Api<PreviewSession>)> {
+) -> CliResult<(OperatorApi<NoClientCert>, Api<PreviewSession>)> {
     let mut subtask = progress.subtask("connecting to operator");
 
     let operator_api = OperatorApi::try_new(config, analytics, progress)
@@ -719,23 +754,18 @@ async fn create_preview_api(
             subtask.failure(None);
         })?;
 
-    let operator_api = operator_api
-        .with_client_certificate(analytics, progress, config)
-        .await
-        .into_certified()
-        .inspect_err(|_| {
-            subtask.failure(None);
-        })?;
-
     subtask.success(Some("connected to operator"));
 
     let client = operator_api.client().clone();
+    let operator_namespace = operator_api.operator().spec.operator_namespace.as_deref();
+    let target_namespace = config.target.namespace.as_deref();
+
     let api = if all_namespaces {
-        Api::all(client.clone())
-    } else if let Some(namespace) = config.target.namespace.as_deref() {
-        Api::namespaced(client.clone(), namespace)
+        Api::all(client)
+    } else if let Some(namespace) = operator_namespace.or(target_namespace) {
+        Api::namespaced(client, namespace)
     } else {
-        Api::default_namespaced(client.clone())
+        Api::default_namespaced(client)
     };
 
     Ok((operator_api, api))

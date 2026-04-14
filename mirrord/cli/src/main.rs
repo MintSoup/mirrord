@@ -291,6 +291,7 @@ use mirrord_config::{
     },
 };
 use mirrord_intproxy::agent_conn::{AgentConnection, AgentConnectionError};
+use mirrord_operator::client::database_branches::resolve_branch_id;
 use mirrord_progress::{JsonProgress, Progress, ProgressTracker, messages::EXEC_CONTAINER_BINARY};
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use nix::errno::Errno;
@@ -340,9 +341,15 @@ mod wsl;
 mod wizard;
 
 #[cfg(unix)]
+mod session;
+
+#[cfg(unix)]
 mod ui;
 
 mod fix;
+
+#[cfg(windows)]
+mod attach;
 
 pub(crate) use error::{CliError, CliResult};
 #[cfg(target_os = "windows")]
@@ -778,6 +785,8 @@ async fn exec(
             None
         }) {
         let port = redis_config.local.port;
+        let redis_instance_id = resolve_branch_id(&redis_config.id, config.key.as_str(), progress);
+        let redis_container_name = format!("mirrord-redis-{redis_instance_id}");
 
         // Get the override variable and build the appropriate connection string
         if let Some(variable) = redis_config.connection.override_variable() {
@@ -794,7 +803,7 @@ async fn exec(
         // Auto-configure: ignore localhost so traffic goes directly to local Redis
         config.feature.network.outgoing.ignore_localhost = true;
 
-        Some(local_redis::start(progress, &redis_config.local).await?)
+        Some(local_redis::start(progress, &redis_config.local, redis_container_name).await?)
     } else {
         None
     };
@@ -952,7 +961,9 @@ async fn port_forward(
     let _ = tokio::try_join!(
         async {
             if !args.port_mapping.is_empty() {
-                let mut port_forward = PortForwarder::new(connection, port_mappings).await?;
+                let (agent_tx, agent_rx) = connection.destructure();
+                let mut port_forward =
+                    PortForwarder::new(agent_tx, agent_rx, port_mappings, None).await?;
                 port_forward.run().await.map_err(|error| error.into())
             } else {
                 Ok::<(), CliError>(())
@@ -1059,9 +1070,9 @@ fn main() -> miette::Result<()> {
             Commands::Operator(args) => {
                 operator_command(*args).await?;
             }
-            Commands::ExtensionExec(args) => windows_unsupported!(args, "ext", {
+            Commands::ExtensionExec(args) => {
                 extension_exec(*args, watch, &user_data).await?;
-            }),
+            }
             Commands::InternalProxy {
                 port,
                 mirrord_for_ci,
@@ -1146,8 +1157,17 @@ fn main() -> miette::Result<()> {
                 .await?
             }
             Commands::Fix(args) => fix::fix_command(args).await?,
+            #[cfg(windows)]
+            Commands::Attach(args) => {
+                let progress = ProgressTracker::from_env("mirrord attach");
+                attach::attach_command(args, &progress)?;
+            }
             #[cfg(unix)]
             Commands::Ui(args) => ui::ui_command(args).await?,
+            #[cfg(unix)]
+            Commands::Session(args) => session::session_command(*args).await?,
+            #[cfg(unix)]
+            Commands::Kill(args) => session::delete_command(*args).await?,
         };
 
         Ok(())

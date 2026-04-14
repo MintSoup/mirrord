@@ -7,7 +7,7 @@ use kube::{
     core::{Status, response::StatusSummary},
 };
 use miette::Diagnostic;
-use mirrord_auth::error::ApiKeyError;
+use mirrord_auth::error::{ApiKeyError, CredentialStoreError};
 use mirrord_config::config::ConfigError;
 use mirrord_console::error::ConsoleError;
 use mirrord_intproxy::{
@@ -345,7 +345,7 @@ pub(crate) enum CliError {
     #[diagnostic(help(
     "Please check the following:
     1. The operator is running and the logs are not showing any errors.
-    2. You have sufficient permissions to port forward to the operator.
+    2. You have sufficient permissions to use the operator (mirrord-operator-user role bound to you)
 
     If you want to run without the operator, please set `\"operator\": false` in the mirrord configuration file.
 
@@ -503,6 +503,20 @@ pub(crate) enum CliError {
     #[error("The '{0}' command is not currently supported on Windows")]
     UnsupportedOnWindows(String),
 
+    #[cfg(windows)]
+    #[error("Failed to open process {0} for attachment: {1}")]
+    AttachProcessOpenFailed(u32, std::io::Error),
+
+    #[cfg(windows)]
+    #[error("Failed to inject layer into process {0}: {1}")]
+    AttachInjectionFailed(u32, String),
+
+    #[cfg(windows)]
+    #[error(
+        "Timed out waiting for layer to signal injection complete in process {0} (30s timeout)"
+    )]
+    AttachLayerTimeout(u32),
+
     #[error(transparent)]
     ApiKey(#[from] ApiKeyError),
 
@@ -525,7 +539,7 @@ pub(crate) enum CliError {
     ))]
     PreviewTargetRequired,
 
-    #[error("Failed to resolve target `{0}` for preview environment")]
+    #[error("Failed to resolve target for preview environment: {0}")]
     #[diagnostic(help(
         "Targetless mode is not supported for preview environments. \
          Please check that the target exists and has running pods.{GENERAL_HELP}"
@@ -610,6 +624,12 @@ pub(crate) enum CliError {
     #[error("Session monitor UI error: {0}")]
     #[diagnostic(help("Check that no other process is using the port and try again."))]
     UiError(String),
+
+    #[error("Failed to read credentials file: {0}")]
+    #[diagnostic(help(
+        "Check that `~/.mirrord/credentials` exists and is readable.{GENERAL_HELP}"
+    ))]
+    CredentialStore(#[from] CredentialStoreError),
 }
 
 impl CliError {
