@@ -607,13 +607,6 @@ pub(crate) enum CliError {
     #[diagnostic(help("Specify the key using --key <key> or set it in your mirrord config file."))]
     PreviewKeyRequired,
 
-    #[error("Failed to resolve target container: {0}")]
-    #[diagnostic(help(
-        "mirrord was unable to resolve the target container from the cluster. \
-        Please check that the target exists and has running pods.{GENERAL_HELP}"
-    ))]
-    RuntimeDataResolution(KubeApiError),
-
     /// Errors produced by the `mirrord up` command.
     #[error(transparent)]
     #[diagnostic(transparent)]
