@@ -8,6 +8,7 @@ use std::{
 };
 
 use bytes::Bytes;
+use futures::FutureExt;
 use mirrord_intproxy_protocol::{
     LayerId, MessageId, NetProtocol, OutgoingConnMetadataResponse, OutgoingConnectRequest,
     OutgoingConnectResponse, OutgoingRequest, OutgoingResponse, ProxyToLayerMessage,
@@ -621,13 +622,14 @@ async fn drain_and_close_listener(listener: TcpListener) {
     const DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
 
     let drain = async {
-        loop {
-            match listener.accept().await {
+        while let Some(lol) = listener.accept().now_or_never() {
+            match lol {
                 Ok((mut stream, peer)) => {
                     tracing::debug!(
                         %peer,
                         "Draining backlogged layer connection after agent failure",
                     );
+                    // std::mem::drop(stream);
                     let _ = stream.shutdown().await;
                 }
                 Err(error) => {

@@ -1,0 +1,3 @@
+experimental.non_blocking_tcp_connect = true
+feature.network.outgoing.ignore_localhost = false
+internal_proxy.log_level = "mirrord_intproxy::proxies::outgoing=debug"
