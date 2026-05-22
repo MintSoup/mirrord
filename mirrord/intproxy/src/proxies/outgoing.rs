@@ -4,7 +4,7 @@ use std::{
     collections::HashMap,
     fmt, io,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use bytes::Bytes;
@@ -22,8 +22,8 @@ use mirrord_protocol::{
 };
 use semver::Version;
 use thiserror::Error;
-use tokio::net::TcpListener;
-use tracing::Level;
+use tokio::{io::AsyncWriteExt, net::TcpListener};
+use tracing::{Instrument, Level, Span, debug_span};
 
 use self::interceptor::Interceptor;
 use crate::{
@@ -349,7 +349,15 @@ impl OutgoingProxy {
                     "Outgoing connect request failed",
                 );
 
-                if in_progress.prepared_listener.is_none() {
+                if let Some(listener) = in_progress.prepared_listener {
+                    // The layer was already told `connect` succeeded (non-blocking
+                    // TCP connect flow), so we can't surface the error as a connect
+                    // response. Instead, FIN the peer fd the layer connected to us
+                    // on. Relying on `TcpListener::drop` alone does not reliably
+                    // wake an `EVFILT_READ` kqueue registration on macOS, leaving
+                    // the layer's socket hung in `ESTABLISHED`.
+                    tokio::spawn(drain_and_close_listener(listener).instrument(Span::current()));
+                } else {
                     message_bus
                         .send(ToLayer {
                             message: ProxyToLayerMessage::Outgoing(OutgoingResponse::Connect(Err(
@@ -594,6 +602,46 @@ impl OutgoingProxy {
             }
         }
     }
+}
+
+/// Drains and shuts down any connection sitting in `listener`'s accept queue,
+/// then drops the listener.
+///
+/// Used by the non-blocking TCP connect flow when the agent fails an outgoing
+/// connect that the layer has already been told succeeded. We must explicitly
+/// FIN the layer-side peer fd, because relying on the listener's `Drop` (which
+/// just `close(2)`s the fd) does not reliably wake an `EVFILT_READ` kqueue
+/// registration on macOS, leaving the layer's socket hung in `ESTABLISHED`.
+#[tracing::instrument(level = Level::DEBUG)]
+async fn drain_and_close_listener(listener: TcpListener) {
+    /// The layer connects essentially immediately after receiving the success
+    /// response, so a pending entry should already be there. The timeout is a
+    /// safety net so we don't tie up a task forever if the layer somehow never
+    /// connected.
+    const DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
+
+    let drain = async {
+        loop {
+            match listener.accept().await {
+                Ok((mut stream, peer)) => {
+                    tracing::debug!(
+                        %peer,
+                        "Draining backlogged layer connection after agent failure",
+                    );
+                    let _ = stream.shutdown().await;
+                }
+                Err(error) => {
+                    tracing::debug!(%error, "Stopped draining listener");
+                    break;
+                }
+            }
+        }
+
+        std::mem::drop(listener);
+        tracing::debug!("dropped listener");
+    };
+
+    let _ = tokio::time::timeout(DRAIN_TIMEOUT, drain).await;
 }
 
 /// Messages consumed by the [`OutgoingProxy`] running as a [`BackgroundTask`].
