@@ -1,6 +1,6 @@
 #![deny(unused_crate_dependencies)]
 
-use std::{collections::HashMap, str::FromStr, time::Instant};
+use std::{collections::HashMap, ops::Not, str::FromStr, time::Instant};
 
 use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
@@ -212,6 +212,28 @@ pub trait Reporter: Sized {
     fn has_error(&self) -> bool;
 }
 
+/// Selects which analytics-server route a report is delivered to.
+#[derive(Debug, Clone, Copy)]
+pub enum ReportTarget {
+    /// `POST /api/v1/event` - the usual one, emitted as the PostHog
+    /// `client_session_v1` event. Used by every long-lived mirrord
+    /// component (CLI, intproxy, etc.) for per-session telemetry.
+    ClientSession,
+
+    /// `POST /api/v1/up-event` - used for mirrord up, emitted as the
+    /// PostHog `mirrord_up_session_v1` event.
+    UpSession,
+}
+
+impl ReportTarget {
+    fn endpoint(self) -> &'static str {
+        match self {
+            ReportTarget::ClientSession => "https://analytics.metalbear.com/api/v1/event",
+            ReportTarget::UpSession => "https://analytics.metalbear.com/api/v1/up-event",
+        }
+    }
+}
+
 /// Due to the drop nature using tokio::spawn, runtime must be started.
 #[derive(Debug)]
 pub struct AnalyticsReporter {
@@ -222,6 +244,7 @@ pub struct AnalyticsReporter {
     start_instant: Instant,
     operator_properties: Option<AnalyticsOperatorProperties>,
     watch: drain::Watch,
+    target: ReportTarget,
 }
 
 impl AnalyticsReporter {
@@ -244,6 +267,7 @@ impl AnalyticsReporter {
             operator_properties: None,
             start_instant: Instant::now(),
             watch,
+            target: ReportTarget::ClientSession,
         }
     }
 
@@ -256,6 +280,24 @@ impl AnalyticsReporter {
         let mut reporter = AnalyticsReporter::new(enabled, execution_kind, watch, machine_id);
         reporter.error_only_send = true;
         reporter
+    }
+
+    /// Constructs a reporter that delivers to [`ReportTarget::UpSession`].
+    pub fn for_up_event(enabled: bool, watch: drain::Watch, machine_id: Uuid) -> Self {
+        let mut analytics = Analytics::default();
+        analytics.add("machine_id", machine_id);
+        analytics.add("is_ci", ci_info::is_ci());
+
+        AnalyticsReporter {
+            analytics,
+            error_only_send: false,
+            enabled,
+            error: None,
+            operator_properties: None,
+            start_instant: Instant::now(),
+            watch,
+            target: ReportTarget::UpSession,
+        }
     }
 
     fn as_report(&self) -> AnalyticsReport {
@@ -323,8 +365,9 @@ impl Drop for AnalyticsReporter {
         if self.enabled && (self.error.is_some() || !self.error_only_send) {
             let report = self.as_report();
             let watch = self.watch.clone();
+            let target = self.target;
             tokio::spawn(async move {
-                send_analytics(report).await;
+                send_analytics(report, target).await;
                 // hold clone of watch to prevent it from being dropped
                 // allowing our task to finish
                 drop(watch);
@@ -355,13 +398,11 @@ struct AnalyticsReport {
     error: Option<AnalyticsError>,
 }
 
-const ANALYTICS_ENDPOINT: &str = "https://analytics.metalbear.com/api/v1/event";
-
 /// Actualy send `Analytics` & `AnalyticsOperatorProperties` to analytics.metalbear.com
 #[tracing::instrument(level = Level::TRACE)]
-async fn send_analytics(report: AnalyticsReport) {
+async fn send_analytics(report: AnalyticsReport, target: ReportTarget) {
     let client = reqwest::Client::new();
-    let res = client.post(ANALYTICS_ENDPOINT).json(&report).send().await;
+    let res = client.post(target.endpoint()).json(&report).send().await;
     if let Err(e) = res {
         info!("Failed to send analytics: {e}");
     }
