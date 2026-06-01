@@ -5484,6 +5484,7 @@ dependencies = [
  "strum_macros 0.27.2",
  "thiserror 2.0.18",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
