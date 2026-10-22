@@ -409,6 +409,7 @@ impl Commands {
             Self::Preview(args) => match &args.command {
                 PreviewCommand::Status(args) => args.all_namespaces,
                 PreviewCommand::Stop(args) => args.all_namespaces,
+                PreviewCommand::Down => true,
                 PreviewCommand::Logs(args) => args.all_namespaces,
                 PreviewCommand::Start(_) | PreviewCommand::Up(_) | PreviewCommand::Diff(_) => false,
             },
@@ -1624,6 +1625,13 @@ pub(super) enum PreviewCommand {
     Status(PreviewStatusArgs),
     /// Delete preview environments.
     Stop(PreviewStopArgs),
+    /// Delete every preview environment under a key, in all namespaces, like
+    /// `mirrord preview stop -k <key> -A`.
+    ///
+    /// Finds the key the way `mirrord preview up` does: `--key`, then `MIRRORD_KEY`, then the git
+    /// branch (`GITHUB_HEAD_REF` when set). On `main`, `master` or without a branch, `--key` is
+    /// required. Succeeds when there is nothing to delete.
+    Down,
     /// Print the output of preview environments' pods.
     Logs(PreviewLogsArgs),
     /// Show how the manifests passed with `--resource` differ from the live cluster.
